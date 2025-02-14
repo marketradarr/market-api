@@ -36,8 +36,7 @@ $searchUrl = 'https://api.marketfiyati.org.tr/api/v2/search';
 $searchData = [
     'keywords' => $searchTerm,
     'pages' => $page,
-    'size' => $size,
-    'depots' => 'sok,a101,bim,migros'  // Array yerine string olarak gönder
+    'size' => $size
 ];
 
 $ch = curl_init($searchUrl);
