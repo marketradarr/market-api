@@ -3,6 +3,66 @@ header('Content-Type: application/json; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, OPTIONS');
 
+// Price history fonksiyonları
+function savePriceHistory($products) {
+    $directory = "price_history";
+    if (!is_dir($directory)) {
+        mkdir($directory);
+    }
+    
+    $date = date('Y-m-d');
+    $filename = "{$directory}/{$date}.json";
+    
+    $priceData = file_exists($filename) ? 
+        json_decode(file_get_contents($filename), true) : [];
+    
+    foreach ($products as $product) {
+        $priceData[$product['id']] = [
+            'id' => $product['id'],
+            'name' => $product['name'],
+            'price' => $product['price'],
+            'market' => $product['market'],
+            'date' => $date
+        ];
+    }
+    
+    file_put_contents($filename, json_encode($priceData, JSON_PRETTY_PRINT));
+    
+    // 30 günden eski dosyaları temizle
+    $files = glob("{$directory}/*.json");
+    foreach ($files as $file) {
+        if (time() - filemtime($file) > 30 * 24 * 60 * 60) {
+            unlink($file);
+        }
+    }
+}
+
+function getPriceHistory($productId) {
+    $history = [];
+    $directory = "price_history";
+    $files = glob("{$directory}/*.json");
+    rsort($files);
+    
+    foreach ($files as $file) {
+        $data = json_decode(file_get_contents($file), true);
+        $date = basename($file, '.json');
+        
+        if (isset($data[$productId])) {
+            $history[] = [
+                'date' => $date,
+                'price' => $data[$productId]['price'],
+                'market' => $data[$productId]['market']
+            ];
+        }
+    }
+    
+    usort($history, function($a, $b) {
+        return strtotime($a['date']) - strtotime($b['date']);
+    });
+    
+    return $history;
+}
+
 // Market listesi
 $marketList = [
     'a101' => 'A101',
@@ -24,7 +84,7 @@ $marketList = [
 // Cache fonksiyonları
 function getCache($key) {
     $cacheFile = "cache/{$key}.json";
-    if (file_exists($cacheFile) && (time() - filemtime($cacheFile) < 300)) { // 5 dakika
+    if (file_exists($cacheFile) && (time() - filemtime($cacheFile) < 300)) {
         return file_get_contents($cacheFile);
     }
     return false;
@@ -42,8 +102,8 @@ function setCache($key, $data) {
 $searchTerm = isset($_GET['search']) ? $_GET['search'] : '';
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 0;
 $size = isset($_GET['size']) ? (int)$_GET['size'] : 24;
-$sort = isset($_GET['sort']) ? $_GET['sort'] : ''; // price_asc, price_desc
-$market = isset($_GET['market']) ? strtolower($_GET['market']) : ''; // market filtresi
+$sort = isset($_GET['sort']) ? $_GET['sort'] : '';
+$market = isset($_GET['market']) ? strtolower($_GET['market']) : '';
 
 // API Bilgileri
 if ($_SERVER['REQUEST_METHOD'] === 'GET' && empty($_GET)) {
@@ -58,7 +118,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' && empty($_GET)) {
                     'page' => 'Sayfa numarası (varsayılan: 0)',
                     'size' => 'Sayfa başına ürün (varsayılan: 24)',
                     'sort' => 'Sıralama (price_asc, price_desc)',
-                    'market' => 'Market filtresi (' . implode(', ', array_keys($marketList)) . ')'
+                    'market' => 'Market filtresi (' . implode(', ', array_keys($marketList)) . ')',
+                    'history' => 'Fiyat geçmişi (true/false)'
                 ],
                 'example' => 'https://market-api-814938584526.us-central1.run.app/?search=ekmek&sort=price_asc&market=a101'
             ]
@@ -166,12 +227,15 @@ $products = array_map(function($product) {
     ];
 }, $response['content']);
 
+// Fiyat geçmişini kaydet
+savePriceHistory($products);
+
 // Market filtresi
 if (!empty($market)) {
     $products = array_filter($products, function($product) use ($market) {
         return strtolower($product['market']) === $market;
     });
-    $products = array_values($products); // Dizin numaralarını sıfırla
+    $products = array_values($products);
 }
 
 // Fiyat sıralaması
@@ -183,6 +247,21 @@ if ($sort === 'price_asc') {
     usort($products, function($a, $b) {
         return $b['price'] <=> $a['price'];
     });
+}
+
+// Fiyat geçmişini ekle
+if (isset($_GET['history']) && $_GET['history'] === 'true') {
+    foreach ($products as &$product) {
+        $history = getPriceHistory($product['id']);
+        $product['price_history'] = [
+            'data' => $history,
+            'stats' => [
+                'min' => !empty($history) ? min(array_column($history, 'price')) : 0,
+                'max' => !empty($history) ? max(array_column($history, 'price')) : 0,
+                'avg' => !empty($history) ? array_sum(array_column($history, 'price')) / count($history) : 0
+            ]
+        ];
+    }
 }
 
 $formattedResponse = [
