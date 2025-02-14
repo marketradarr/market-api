@@ -37,7 +37,7 @@ $searchData = [
     'keywords' => $searchTerm,
     'pages' => $page,
     'size' => $size,
-    'depots' => ['sok', 'a101', 'bim', 'migros']
+    'depots' => 'sok,a101,bim,migros'  // Array yerine string olarak gönder
 ];
 
 $ch = curl_init($searchUrl);
@@ -62,6 +62,15 @@ curl_setopt_array($ch, [
 
 $searchResponse = curl_exec($ch);
 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+
+// Debug bilgisi ekle
+$debug = [
+    'url' => $searchUrl,
+    'data' => $searchData,
+    'httpCode' => $httpCode,
+    'response' => $searchResponse
+];
+
 curl_close($ch);
 
 // Search API hata kontrolü
@@ -69,7 +78,7 @@ if ($httpCode !== 200) {
     echo json_encode([
         'error' => 'Search API Hatası',
         'status' => $httpCode,
-        'response' => $searchResponse
+        'debug' => $debug
     ]);
     exit;
 }
