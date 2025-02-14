@@ -10,24 +10,32 @@ if (empty($searchTerm)) {
     exit;
 }
 
-$ch = curl_init('https://api.marketfiyati.org.tr/api/v2/search');
+// URL'yi oluştur
+$url = 'https://api.marketfiyati.org.tr/api/v2/search?keywords=' . urlencode($searchTerm);
+
+$ch = curl_init($url);
 curl_setopt_array($ch, [
-    CURLOPT_POST => true,
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_POSTFIELDS => json_encode([
-        'keywords' => $searchTerm,
-        'pages' => 0,
-        'size' => 24,
-        'depots' => ['sok', 'a101', 'bim', 'migros']
-    ]),
+    CURLOPT_HTTPGET => true,  // GET metodu kullan
     CURLOPT_HTTPHEADER => [
-        'Content-Type: application/json',
+        'Accept: application/json',
+        'User-Agent: Mozilla/5.0',
         'Origin: https://marketfiyati.org.tr',
         'Referer: https://marketfiyati.org.tr/'
     ]
 ]);
 
 $response = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 curl_close($ch);
+
+if ($httpCode !== 200) {
+    echo json_encode([
+        'error' => 'API hatası', 
+        'code' => $httpCode,
+        'response' => $response
+    ]);
+    exit;
+}
 
 echo $response;
