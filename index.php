@@ -7,166 +7,98 @@ header('Access-Control-Allow-Methods: GET, OPTIONS');
 $searchTerm = isset($_GET['search']) ? $_GET['search'] : '';
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 0;
 $size = isset($_GET['size']) ? (int)$_GET['size'] : 24;
-$sortBy = isset($_GET['sort']) ? $_GET['sort'] : 'price_asc'; // price_asc, price_desc, distance
-$market = isset($_GET['market']) ? $_GET['market'] : ''; // a101, bim, sok, migros
-$userLat = isset($_GET['lat']) ? (float)$_GET['lat'] : null;
-$userLng = isset($_GET['lng']) ? (float)$_GET['lng'] : null;
 
-// API'den veriyi al
-// ... mevcut kod ...
+// Zorunlu parametre kontrolü
+if (empty($searchTerm)) {
+    echo json_encode(['error' => 'Arama terimi gerekli']);
+    exit;
+}
 
-// Yanıtı Android için düzenle
-$formattedResponse = [
-    'status' => 'success',
-    'total' => $response['numberOfFound'],
-    'page' => $page,
-    'size' => $size,
-    'filters' => [
-        'markets' => array_map(function($market) {
-            return [
-                'id' => $market['name'],
-                'name' => ucfirst($market['name']),
-                'count' => $market['count']
-            ];
-        }, $response['facetMap']['market_names']),
-        'brands' => array_map(function($brand) {
-            return [
-                'name' => $brand['name'],
-                'count' => $brand['count']
-            ];
-        }, $response['facetMap']['brand']),
-        'weights' => array_map(function($weight) {
-            return [
-                'value' => $weight['name'],
-                'count' => $weight['count']
-            ];
-        }, $response['facetMap']['refined_volume_weight']),
-        'categories' => array_map(function($cat) {
-            return [
-                'name' => $cat['name'],
-                'count' => $cat['count']
-            ];
-        }, $response['facetMap']['main_category'])
-    ],
-    'products' => []
+// Search API'ye istek at
+$searchUrl = 'https://api.marketfiyati.org.tr/api/v2/search';
+$searchData = [
+    'keywords' => $searchTerm,
+    'pages' => $page,
+    'size' => $size
 ];
 
-foreach ($response['content'] as $product) {
-    // Ağırlık/Hacim bilgisini çıkar
-    preg_match('/(\d+(?:\.\d+)?)\s*(gr|kg|ml|lt)/', $product['title'], $matches);
-    $weight = [
-        'value' => $matches[1] ?? null,
-        'unit' => $matches[2] ?? null
-    ];
+$ch = curl_init($searchUrl);
+curl_setopt_array($ch, [
+    CURLOPT_POST => true,
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_SSL_VERIFYPEER => false,
+    CURLOPT_SSL_VERIFYHOST => false,
+    CURLOPT_HTTPHEADER => [
+        'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'Accept-Encoding: gzip, deflate',
+        'Origin: https://marketfiyati.org.tr',
+        'Referer: https://marketfiyati.org.tr/',
+        'Cache-Control: no-cache',
+        'Pragma: no-cache',
+        'Connection: keep-alive'
+    ],
+    CURLOPT_POSTFIELDS => json_encode($searchData)
+]);
 
-    // Her ürün için en ucuz fiyatı ve diğer mağazaları bul
-    $lowestPrice = PHP_FLOAT_MAX;
-    $selectedStore = null;
-    $otherStores = [];
-    
-    foreach ($product['productDepotInfoList'] as $store) {
-        $storeInfo = [
-            'market' => [
-                'id' => $store['marketAdi'],
-                'name' => ucfirst($store['marketAdi']),
-                'logo' => getMarketLogo($store['marketAdi'])
-            ],
-            'store' => [
-                'id' => $store['depotId'],
-                'name' => $store['depotName'],
-                'location' => [
-                    'lat' => $store['latitude'],
-                    'lng' => $store['longitude']
-                ]
-            ],
-            'price' => $store['price'],
-            'distance' => $userLat && $userLng ? 
-                calculateDistance($userLat, $userLng, $store['latitude'], $store['longitude']) : null,
-            'lastUpdate' => $store['indexTime']
-        ];
+$searchResponse = curl_exec($ch);
+$httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
-        if ($store['price'] < $lowestPrice) {
-            $lowestPrice = $store['price'];
-            $selectedStore = $storeInfo;
+// Debug bilgisi ekle
+$debug = [
+    'url' => $searchUrl,
+    'data' => $searchData,
+    'httpCode' => $httpCode,
+    'response' => $searchResponse
+];
+
+curl_close($ch);
+
+// Search API hata kontrolü
+if ($httpCode !== 200) {
+    echo json_encode([
+        'error' => 'Search API Hatası',
+        'status' => $httpCode,
+        'debug' => $debug
+    ]);
+    exit;
+}
+
+// API yanıtını kontrol et
+$response = json_decode($searchResponse, true);
+if (!$response || !isset($response['content'])) {
+    echo json_encode([
+        'error' => 'Geçersiz API yanıtı',
+        'debug' => $debug
+    ]);
+    exit;
+}
+
+// Basit yanıt formatı
+$formattedResponse = [
+    'total' => $response['numberOfFound'],
+    'products' => array_map(function($product) {
+        $lowestPrice = PHP_FLOAT_MAX;
+        $selectedStore = null;
+        
+        foreach ($product['productDepotInfoList'] as $store) {
+            if ($store['price'] < $lowestPrice) {
+                $lowestPrice = $store['price'];
+                $selectedStore = $store;
+            }
         }
-        $otherStores[] = $storeInfo;
-    }
 
-    // Ürün bilgilerini düzenle
-    $formattedProduct = [
-        'id' => $product['id'],
-        'name' => $product['title'],
-        'brand' => [
-            'name' => $product['brand'],
-            'logo' => getBrandLogo($product['brand'])
-        ],
-        'image' => $product['imageUrl'],
-        'weight' => $weight,
-        'categories' => $product['categories'],
-        'price' => [
-            'current' => $lowestPrice,
-            'currency' => 'TL'
-        ],
-        'bestOffer' => $selectedStore,
-        'allStores' => $otherStores
-    ];
-
-    $formattedResponse['products'][] = $formattedProduct;
-}
-
-// Yardımcı fonksiyonlar
-function getMarketLogo($marketId) {
-    $logos = [
-        'a101' => 'https://market-api-814938584526.us-central1.run.app/assets/logos/a101.png',
-        'bim' => 'https://market-api-814938584526.us-central1.run.app/assets/logos/bim.png',
-        'sok' => 'https://market-api-814938584526.us-central1.run.app/assets/logos/sok.png',
-        'migros' => 'https://market-api-814938584526.us-central1.run.app/assets/logos/migros.png',
-        // diğer marketler...
-    ];
-    return $logos[strtolower($marketId)] ?? null;
-}
-
-function getBrandLogo($brandName) {
-    // Marka logolarını döndür
-    return null; // şimdilik null
-}
-
-function calculateDistance($lat1, $lon1, $lat2, $lon2) {
-    // Haversine formülü ile mesafe hesapla
-    $earthRadius = 6371; // km
-
-    $dLat = deg2rad($lat2 - $lat1);
-    $dLon = deg2rad($lon2 - $lon1);
-
-    $a = sin($dLat/2) * sin($dLat/2) +
-        cos(deg2rad($lat1)) * cos(deg2rad($lat2)) *
-        sin($dLon/2) * sin($dLon/2);
-    
-    $c = 2 * atan2(sqrt($a), sqrt(1-$a));
-    
-    return round($earthRadius * $c, 2);
-}
-
-// Sıralama
-if ($sortBy == 'price_asc') {
-    usort($formattedResponse['products'], function($a, $b) {
-        return $a['price']['current'] <=> $b['price']['current'];
-    });
-} else if ($sortBy == 'price_desc') {
-    usort($formattedResponse['products'], function($a, $b) {
-        return $b['price']['current'] <=> $a['price']['current'];
-    });
-} else if ($sortBy == 'distance' && $userLat && $userLng) {
-    usort($formattedResponse['products'], function($a, $b) {
-        return $a['bestOffer']['distance'] <=> $b['bestOffer']['distance'];
-    });
-}
-
-// Market filtresi
-if (!empty($market)) {
-    $formattedResponse['products'] = array_filter($formattedResponse['products'], function($product) use ($market) {
-        return strtolower($product['bestOffer']['market']['id']) == strtolower($market);
-    });
-}
+        return [
+            'id' => $product['id'],
+            'name' => $product['title'],
+            'brand' => $product['brand'],
+            'image' => $product['imageUrl'],
+            'price' => $lowestPrice,
+            'market' => $selectedStore['marketAdi'],
+            'store' => $selectedStore['depotName']
+        ];
+    }, $response['content'])
+];
 
 echo json_encode($formattedResponse, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
